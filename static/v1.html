@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8" />
+  <title>Phase 1 · Keyword Search</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f7fa; color: #333; }
+    header { background: #1a73e8; color: #fff; padding: 16px 24px; display: flex; align-items: center; gap: 12px; }
+    header h1 { font-size: 18px; font-weight: 600; }
+    header span { font-size: 12px; background: rgba(255,255,255,0.2); padding: 2px 8px; border-radius: 12px; }
+    nav { background: #fff; border-bottom: 1px solid #e0e0e0; padding: 0 24px; display: flex; gap: 0; }
+    nav a { display: inline-block; padding: 12px 16px; font-size: 14px; color: #555; text-decoration: none; border-bottom: 3px solid transparent; }
+    nav a:hover { color: #1a73e8; }
+    nav a.active { color: #1a73e8; border-bottom-color: #1a73e8; font-weight: 600; }
+    main { max-width: 800px; margin: 32px auto; padding: 0 16px; }
+    .search-box { display: flex; gap: 8px; margin-bottom: 24px; }
+    .search-box input { flex: 1; padding: 10px 14px; border: 1px solid #ddd; border-radius: 6px; font-size: 15px; outline: none; }
+    .search-box input:focus { border-color: #1a73e8; box-shadow: 0 0 0 3px rgba(26,115,232,.15); }
+    .search-box button { padding: 10px 20px; background: #1a73e8; color: #fff; border: none; border-radius: 6px; font-size: 15px; cursor: pointer; }
+    .search-box button:hover { background: #1557b0; }
+    .upload-area { background: #fff; border: 2px dashed #cdd; border-radius: 8px; padding: 20px; text-align: center; margin-bottom: 24px; cursor: pointer; }
+    .upload-area:hover { border-color: #1a73e8; }
+    .upload-area input { display: none; }
+    .status { font-size: 13px; color: #666; margin-top: 6px; }
+    .result-card { background: #fff; border-radius: 8px; padding: 16px 20px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+    .result-card .file { font-weight: 600; color: #1a73e8; }
+    .result-card .score { font-size: 12px; color: #888; margin-left: 8px; }
+    .result-card .snippet { margin-top: 8px; font-size: 14px; color: #555; line-height: 1.6; }
+    .empty { text-align: center; color: #999; padding: 48px 0; }
+    .count { font-size: 14px; color: #666; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>On-Call Assistant</h1>
+    <span>Phase 1 · Keyword Search</span>
+  </header>
+  <nav>
+    <a href="/v1" class="active">关键词搜索</a>
+    <a href="/v2">语义搜索</a>
+    <a href="/v3">Agent 对话</a>
+  </nav>
+  <main>
+    <div class="upload-area" onclick="document.getElementById('fileInput').click()">
+      <div>点击上传 SOP 文档（.html）</div>
+      <input type="file" id="fileInput" accept=".html" multiple />
+      <div class="status" id="uploadStatus">支持批量上传</div>
+    </div>
+    <div class="search-box">
+      <input type="text" id="queryInput" placeholder="输入关键词，如 OOM、CDN、故障…" />
+      <button onclick="search()">搜索</button>
+    </div>
+    <div id="results"></div>
+  </main>
+  <script>
+    document.getElementById('queryInput').addEventListener('keydown', e => { if (e.key === 'Enter') search(); });
+    document.getElementById('fileInput').addEventListener('change', upload);
+
+    async function upload(e) {
+      const files = e.target.files;
+      const status = document.getElementById('uploadStatus');
+      for (const file of files) {
+        const form = new FormData();
+        form.append('file', file);
+        const res = await fetch('/v1/documents', { method: 'POST', body: form });
+        const data = await res.json();
+        status.textContent = data.message || data.detail;
+      }
+    }
+
+    async function search() {
+      const q = document.getElementById('queryInput').value.trim();
+      if (!q) return;
+      const res = await fetch('/v1/search?q=' + encodeURIComponent(q));
+      const data = await res.json();
+      const el = document.getElementById('results');
+      if (data.results.length === 0) {
+        el.innerHTML = '<div class="empty">未找到匹配文档</div>';
+        return;
+      }
+      el.innerHTML = `<div class="count">找到 ${data.total} 个结果</div>` +
+        data.results.map(r => `
+          <div class="result-card">
+            <div><span class="file">${r.file}</span><span class="score">匹配 ${r.score} 次</span></div>
+            <div class="snippet">${r.snippet}</div>
+          </div>`).join('');
+    }
+  </script>
+</body>
+</html>
