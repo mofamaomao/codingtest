@@ -194,6 +194,42 @@ def do_read_file(fname: str) -> str:
     return extract_text(html)
 
 
+def _serialise_messages(messages: list) -> list:
+    """Convert Anthropic SDK objects in message history to plain dicts."""
+    result = []
+    for msg in messages:
+        content = msg["content"]
+        if isinstance(content, list):
+            serialised = []
+            for block in content:
+                if hasattr(block, "type"):
+                    d: dict = {"type": block.type}
+                    if block.type == "text":
+                        d["text"] = block.text
+                    elif block.type == "tool_use":
+                        d["id"] = block.id
+                        d["name"] = block.name
+                        d["input"] = dict(block.input)
+                    serialised.append(d)
+                elif isinstance(block, dict):
+                    serialised.append(block)
+            result.append({"role": msg["role"], "content": serialised})
+        else:
+            result.append({"role": msg["role"], "content": content})
+    return result
+
+
+def _extract_text(content) -> str:
+    if not isinstance(content, list):
+        return str(content) if content else ""
+    return "".join(
+        block.text if hasattr(block, "text") else block.get("text", "")
+        for block in content
+        if (hasattr(block, "type") and block.type == "text")
+        or (isinstance(block, dict) and block.get("type") == "text")
+    )
+
+
 @app.post("/v3/chat")
 async def agent_chat(body: dict):
     user_message = body.get("message", "").strip()
@@ -201,78 +237,57 @@ async def agent_chat(body: dict):
 
     if not user_message:
         raise HTTPException(400, "message is required")
+    if client is None:
+        raise HTTPException(503, "ANTHROPIC_API_KEY not configured")
 
     messages = list(history) + [{"role": "user", "content": user_message}]
     tool_calls_log = []
+    last_assistant_content = None
 
-    # Agentic loop – up to 5 turns to allow multi-tool use
-    for _ in range(5):
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=2048,
-            system=SYSTEM_PROMPT,
-            tools=[READ_FILE_TOOL],
-            messages=messages,
-        )
+    try:
+        for _ in range(5):
+            response = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=2048,
+                system=SYSTEM_PROMPT,
+                tools=[READ_FILE_TOOL],
+                messages=messages,
+            )
 
-        # Collect any text content
-        assistant_content = response.content
-        messages.append({"role": "assistant", "content": assistant_content})
+            assistant_content = response.content
+            last_assistant_content = assistant_content
+            messages.append({"role": "assistant", "content": assistant_content})
 
-        if response.stop_reason == "end_turn":
-            break
+            if response.stop_reason == "end_turn":
+                break
 
-        if response.stop_reason == "tool_use":
-            tool_results = []
-            for block in assistant_content:
-                if block.type == "tool_use":
-                    result = do_read_file(block.input.get("fname", ""))
-                    tool_calls_log.append({
-                        "tool": block.name,
-                        "input": block.input,
-                        "result_preview": result[:200],
-                    })
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result,
-                    })
-            messages.append({"role": "user", "content": tool_results})
-        else:
-            break
+            if response.stop_reason == "tool_use":
+                tool_results = []
+                for block in assistant_content:
+                    if block.type == "tool_use":
+                        result = do_read_file(block.input.get("fname", ""))
+                        tool_calls_log.append({
+                            "tool": block.name,
+                            "input": dict(block.input),
+                            "result_preview": result[:200],
+                        })
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": result,
+                        })
+                messages.append({"role": "user", "content": tool_results})
+            else:
+                break
 
-    # Extract final text reply
-    final_text = ""
-    for block in messages[-1]["content"] if isinstance(messages[-1]["content"], list) else []:
-        if hasattr(block, "text"):
-            final_text += block.text
+    except Exception as e:
+        raise HTTPException(500, f"Agent error: {e}")
 
-    # Build updated history (keep only role/content with serialisable content)
-    updated_history = []
-    for msg in messages:
-        content = msg["content"]
-        if isinstance(content, list):
-            serialised = []
-            for block in content:
-                if hasattr(block, "type"):
-                    d = {"type": block.type}
-                    if block.type == "text":
-                        d["text"] = block.text
-                    elif block.type == "tool_use":
-                        d["id"] = block.id
-                        d["name"] = block.name
-                        d["input"] = block.input
-                    serialised.append(d)
-                elif isinstance(block, dict):
-                    serialised.append(block)
-            updated_history.append({"role": msg["role"], "content": serialised})
-        else:
-            updated_history.append({"role": msg["role"], "content": content})
-
+    final_text = _extract_text(last_assistant_content)
     return {
         "reply": final_text,
         "tool_calls": tool_calls_log,
-        "history": updated_history,
+        "history": _serialise_messages(messages),
     }
 
 
