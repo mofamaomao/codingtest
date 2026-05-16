@@ -17,7 +17,6 @@
       overflow-x: hidden;
     }
 
-    /* ── Canvas ── */
     #canvas {
       position: fixed;
       inset: 0;
@@ -26,7 +25,6 @@
       pointer-events: none;
     }
 
-    /* ── Page wrapper ── */
     .page { position: relative; z-index: 1; min-height: 100vh; }
 
     /* ── Navigation ── */
@@ -71,7 +69,6 @@
     }
     .nav-download:hover { background: rgba(32,33,36,0.85) !important; }
 
-    /* ── Chevron icon ── */
     .chev { width: 14px; height: 14px; opacity: 0.7; }
 
     /* ── Hero ── */
@@ -107,7 +104,6 @@
       padding: 15px 28px; font-size: 16px; font-weight: 500;
       font-family: inherit; text-decoration: none; cursor: pointer;
       transition: background 0.15s, transform 0.1s;
-      letter-spacing: 0;
     }
     .btn-primary:hover { background: #3c4043; }
     .btn-primary:active { transform: scale(0.98); }
@@ -128,10 +124,8 @@
 <canvas id="canvas"></canvas>
 
 <div class="page">
-  <!-- Navigation -->
   <nav class="nav">
     <a href="#" class="nav-logo">
-      <!-- Google Antigravity "A" logo -->
       <svg width="26" height="26" viewBox="0 0 26 26" fill="none">
         <path d="M13 1 L25 23 L1 23 Z" fill="#1a1f2e"/>
         <path d="M13 9 L21 22 L5 22 Z" fill="#ffffff"/>
@@ -168,7 +162,6 @@
     </a>
   </nav>
 
-  <!-- Hero -->
   <main class="hero">
     <div class="hero-badge">
       <svg width="20" height="20" viewBox="0 0 26 26" fill="none">
@@ -185,7 +178,6 @@
 
     <div class="hero-buttons">
       <a href="#" class="btn-primary">
-        <!-- Windows logo -->
         <svg width="17" height="17" viewBox="0 0 17 17" fill="currentColor">
           <rect x="0" y="0" width="7.8" height="7.8"/>
           <rect x="9.2" y="0" width="7.8" height="7.8"/>
@@ -201,110 +193,105 @@
 
 <script>
 // ─────────────────────────────────────────────
-//  Particle System
+//  极坐标粒子系统
+//  核心：圆周轨道运动 + 鼠标斥力场偏移 + 弹簧-lerp 回归轨道
 // ─────────────────────────────────────────────
 const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
+const ctx    = canvas.getContext('2d');
 
-let W = 0, H = 0;
+let W = 0, H = 0, cx = 0, cy = 0;
 const mouse = { x: -9999, y: -9999 };
 
-// Google brand palette – blues/purples on left, reds/oranges/yellows on right
+// Google 品牌色（低饱和度明亮调）
 const COLORS = [
-  '#4285F4', '#3367D6', '#1A73E8', '#1557B0',   // blues
-  '#7C4DFF', '#651FFF', '#9334EA', '#6B21A8',   // purples
-  '#3949AB', '#283593', '#3D1FAB',               // indigo/deep blue
-  '#EA4335', '#D32F2F', '#C62828', '#E53935',   // reds
-  '#FF6D00', '#E65100', '#F57C00', '#FF8F00',   // oranges
-  '#FBBC04', '#F9A825', '#F57F17', '#FFB300',   // yellows
+  '#4285F4', '#1A73E8', '#1557B0',          // 蓝
+  '#EA4335', '#C62828', '#E53935',          // 红
+  '#FBBC04', '#F9A825', '#FFB300',          // 黄
+  '#34A853', '#1E8E3E', '#00897B',          // 绿
+  '#9334EA', '#7C4DFF', '#651FFF',          // 紫
+  '#FF6D00', '#F57C00', '#FF8F00',          // 橙
 ];
 
 // ── Particle ──────────────────────────────────
 class Particle {
-  constructor(initial = false) {
-    this.reset(initial);
+  constructor() {
+    this.init();
   }
 
-  reset(initial = false) {
-    this.x = Math.random() * W;
-    this.y = initial ? Math.random() * H : H + 16;
+  init() {
+    const maxR = Math.min(W, H) * 0.46;
 
-    // Mostly upward, slight horizontal spread
-    const spd  = 0.35 + Math.random() * 1.1;
-    const ang  = -Math.PI / 2 + (Math.random() - 0.5) * 1.1;
-    this.vx    = Math.cos(ang) * spd;
-    this.vy    = Math.sin(ang) * spd;
+    // 极坐标：轨道半径、初始角度、角速度
+    this.r     = 48 + Math.random() * maxR;
+    this.theta = Math.random() * Math.PI * 2;
+    const dir  = Math.random() < 0.5 ? 1 : -1;
+    // 外圈角速度略慢（模拟开普勒效应）
+    this.omega = dir * (0.002 + Math.random() * 0.006) * (1 - this.r / (maxR * 2.4));
 
-    this.bw    = 1.8 + Math.random() * 1.4;          // base width
-    this.bh    = 7   + Math.random() * 11;            // base height
-    this.angle = Math.random() * Math.PI * 2;
-    this.dAngle= (Math.random() - 0.5) * 0.028;      // rotation per frame
+    // 视觉：短矩形，沿切线朝向
+    this.len   = 2.5 + Math.random() * 5.5;
+    this.thick = 1.2 + Math.random() * 1.2;
+    this.color   = COLORS[Math.floor(Math.random() * COLORS.length)];
+    this.opacity = 0.55 + Math.random() * 0.40;
 
-    // Bias color by x position: blue-purple left, red-yellow right
-    const coolColors = COLORS.slice(0, 11);
-    const warmColors = COLORS.slice(11);
-    const t = Math.random(); // mix ratio
-    const bias = this.x / (W || 1);
-    const pool = (Math.random() < 0.55 - bias * 0.5 + 0.15)
-      ? coolColors : warmColors;
-    this.color   = pool[Math.floor(Math.random() * pool.length)];
-    this.opacity = 0.60 + Math.random() * 0.38;
+    // 轨道偏移量（由鼠标力场产生，弹簧回归）
+    this.ox = 0; this.oy  = 0;
+    this.vox = 0; this.voy = 0;
+
+    this.x = cx + this.r * Math.cos(this.theta);
+    this.y = cy + this.r * Math.sin(this.theta);
   }
 
   update() {
-    // Mouse repulsion
-    const dx = this.x - mouse.x;
-    const dy = this.y - mouse.y;
+    // ① 推进角度 → 圆周运动
+    this.theta += this.omega;
+
+    // ② 基准轨道坐标
+    const bx = cx + this.r * Math.cos(this.theta);
+    const by = cy + this.r * Math.sin(this.theta);
+
+    // ③ 当前实际位置（含偏移）
+    const px = bx + this.ox;
+    const py = by + this.oy;
+
+    // ④ 鼠标斥力场
+    const dx = px - mouse.x;
+    const dy = py - mouse.y;
     const d2 = dx * dx + dy * dy;
-    const R  = 140;
-    if (d2 < R * R && d2 > 0.1) {
-      const d    = Math.sqrt(d2);
-      const f    = ((R - d) / R) * 0.72;
-      this.vx   += (dx / d) * f;
-      this.vy   += (dy / d) * f;
+    const R  = 160;
+    if (d2 < R * R && d2 > 0.5) {
+      const d = Math.sqrt(d2);
+      const f = ((R - d) / R) * 2.2;
+      this.vox += (dx / d) * f;
+      this.voy += (dy / d) * f;
     }
 
-    // Damping
-    this.vx *= 0.975;
-    this.vy *= 0.975;
+    // ⑤ 弹簧回归（偏移越大、回归力越强，等效 lerp 缓动）
+    this.vox += -this.ox * 0.055;
+    this.voy += -this.oy * 0.055;
 
-    // Keep minimum upward velocity (anti-gravity floor)
-    if (this.vy > -0.25) this.vy -= 0.012;
+    // ⑥ 阻尼
+    this.vox *= 0.80;
+    this.voy *= 0.80;
 
-    // Speed cap
-    const spd = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
-    if (spd > 7) { this.vx = this.vx / spd * 7; this.vy = this.vy / spd * 7; }
+    // ⑦ 积分
+    this.ox += this.vox;
+    this.oy += this.voy;
 
-    this.x += this.vx;
-    this.y += this.vy;
-
-    // Slow rotation; when fast align toward velocity
-    const velAngle = Math.atan2(this.vy, this.vx) + Math.PI / 2;
-    if (spd > 0.8) {
-      let diff = velAngle - this.angle;
-      while (diff >  Math.PI) diff -= 2 * Math.PI;
-      while (diff < -Math.PI) diff += 2 * Math.PI;
-      this.angle += diff * Math.min(spd / 8, 0.35);
-    } else {
-      this.angle += this.dAngle;
-    }
-
-    // Respawn
-    if (this.y < -24 || this.x < -50 || this.x > W + 50) this.reset();
+    this.x = bx + this.ox;
+    this.y = by + this.oy;
   }
 
   draw() {
-    const spd    = Math.sqrt(this.vx * this.vx + this.vy * this.vy);
-    const stretch= 1 + spd * 0.22;
-    const w      = this.bw;
-    const h      = this.bh * stretch;
+    // 切线方向角（粒子朝向与轨道切线对齐）
+    const tangent = this.theta + Math.PI / 2;
 
     ctx.save();
     ctx.translate(this.x, this.y);
-    ctx.rotate(this.angle);
+    ctx.rotate(tangent);
     ctx.globalAlpha = this.opacity;
-    ctx.fillStyle    = this.color;
-    ctx.fillRect(-w / 2, -h / 2, w, h);
+    ctx.fillStyle   = this.color;
+    ctx.fillRect(-this.len / 2, -this.thick / 2, this.len, this.thick);
     ctx.restore();
   }
 }
@@ -313,50 +300,44 @@ class Particle {
 let particles = [];
 
 function resize() {
-  canvas.width  = W = window.innerWidth;
-  canvas.height = H = window.innerHeight;
+  W = canvas.width  = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+  cx = W / 2;
+  cy = H * 0.50;   // 力场中心：页面垂直中部
 }
 
 function init() {
   resize();
-  const count = Math.round(Math.min(420, W * H / 2800));
-  particles = Array.from({ length: count }, () => new Particle(true));
+  const count = Math.round(Math.min(480, W * H / 2600));
+  particles = Array.from({ length: count }, () => new Particle());
 }
 
-// ── Animation loop ────────────────────────────
+// ── 动画循环 ──────────────────────────────────
 function tick() {
   ctx.clearRect(0, 0, W, H);
   for (const p of particles) { p.update(); p.draw(); }
   requestAnimationFrame(tick);
 }
 
-// ── Events ────────────────────────────────────
-window.addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
-window.addEventListener('mouseleave', ()  => { mouse.x = -9999; mouse.y = -9999; });
-window.addEventListener('resize', resize);
+// ── 事件 ──────────────────────────────────────
+window.addEventListener('mousemove',  e  => { mouse.x = e.clientX; mouse.y = e.clientY; });
+window.addEventListener('mouseleave', () => { mouse.x = -9999; mouse.y = -9999; });
+window.addEventListener('resize', () => {
+  resize();
+  for (const p of particles) p.init();
+});
 
-// Click burst
+// 点击爆炸
 window.addEventListener('click', e => {
   const bx = e.clientX, by = e.clientY;
   for (const p of particles) {
     const dx = p.x - bx, dy = p.y - by;
     const d  = Math.sqrt(dx * dx + dy * dy) || 1;
-    if (d < 220) {
-      const f = (220 - d) / 220 * 5;
-      p.vx += dx / d * f;
-      p.vy += dy / d * f;
+    if (d < 240) {
+      const f = (240 - d) / 240 * 6;
+      p.vox += dx / d * f;
+      p.voy += dy / d * f;
     }
-  }
-});
-
-// Scroll: particles drift horizontally on scroll
-let lastScrollY = 0;
-window.addEventListener('scroll', () => {
-  const delta = window.scrollY - lastScrollY;
-  lastScrollY = window.scrollY;
-  for (const p of particles) {
-    p.vy += delta * 0.04;
-    p.vx += (Math.random() - 0.5) * Math.abs(delta) * 0.06;
   }
 });
 
