@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+beautifulsoup4
+anthropic
+httpx
+scikit-learn
+numpy
+python-multipart
